@@ -16,6 +16,40 @@ let globalConfig = {
     CONF: null
 };
 
+const DANMU_API = process.env.DANMU_API || "";
+
+function encodeMeta(obj) {
+    try {
+        return Buffer.from(JSON.stringify(obj || {}), 'utf8').toString('base64');
+    } catch {
+        return '';
+    }
+}
+
+function decodeMeta(str) {
+    try {
+        return JSON.parse(Buffer.from(str || '', 'base64').toString('utf8') || '{}');
+    } catch {
+        return {};
+    }
+}
+
+function buildScrapedEpisodeName(scrapeData, mapping, originalName) {
+    if (!mapping || mapping.episodeNumber === 0 || (mapping.confidence && mapping.confidence < 0.5)) {
+        return originalName;
+    }
+    if (mapping.episodeName) {
+        return mapping.episodeName;
+    }
+    if (scrapeData && Array.isArray(scrapeData.episodes)) {
+        const hit = scrapeData.episodes.find((ep) => ep.episodeNumber === mapping.episodeNumber && ep.seasonNumber === mapping.seasonNumber);
+        if (hit?.name) {
+            return `${hit.episodeNumber}.${hit.name}`;
+        }
+    }
+    return originalName;
+}
+
 // ========== 加密工具类 ==========
 const WawaCrypto = {
     // 生成 UUID (32位 Hex)
@@ -284,22 +318,28 @@ async function detail(params) {
     let vod_play_sources = [];
 
     if (item.vod_play_list) {
-        item.vod_play_list.forEach(source => {
+        item.vod_play_list.forEach((source, sourceIndex) => {
             let episodes = [];
-            source.urls.forEach(u => {
+            source.urls.forEach((u, epIndex) => {
+                const fid = `${id}#${sourceIndex}#${epIndex}`;
                 const playObj = {
                     name: u.name,
                     url: u.url,
                     from: u.from,
-                    parse: source.player_info.parse2
+                    parse: source.player_info.parse2,
+                    sid: String(id || ''),
+                    fid: fid,
+                    v: item.vod_name || '',
+                    e: u.name || '',
                 };
                 
-                const jsonStr = JSON.stringify(playObj);
-                const encodedId = Buffer.from(jsonStr).toString('base64');
+                const encodedId = encodeMeta(playObj);
 
                 episodes.push({
                     name: u.name,
-                    playId: encodedId
+                    playId: encodedId,
+                    _fid: fid,
+                    _rawName: u.name || '正片',
                 });
             });
 
@@ -310,17 +350,83 @@ async function detail(params) {
         });
     }
 
+    // 刮削处理
+    let scrapeData = null;
+    let videoMappings = [];
+    let scrapeType = '';
+    const scrapeCandidates = [];
+    for (const source of vod_play_sources) {
+        for (const ep of source.episodes || []) {
+            if (!ep._fid) continue;
+            scrapeCandidates.push({
+                fid: ep._fid,
+                file_id: ep._fid,
+                file_name: ep._rawName || ep.name || '正片',
+                name: ep._rawName || ep.name || '正片',
+                format_type: 'video',
+            });
+        }
+    }
+
+    if (scrapeCandidates.length > 0) {
+        try {
+            const sourceId = `spider_source_${await OmniBox.getSourceId()}_${String(id || '')}`;
+            const scrapingResult = await OmniBox.processScraping(sourceId, item.vod_name || '', item.vod_name || '', scrapeCandidates);
+            OmniBox.log('info', `[哇哇影视] 刮削处理完成,结果: ${JSON.stringify(scrapingResult || {}).substring(0, 200)}`);
+            const metadata = await OmniBox.getScrapeMetadata(sourceId);
+            scrapeData = metadata?.scrapeData || null;
+            videoMappings = metadata?.videoMappings || [];
+            scrapeType = metadata?.scrapeType || '';
+            OmniBox.log('info', `[哇哇影视] 刮削元数据读取完成: ${JSON.stringify({ hasScrapeData: !!scrapeData, mappingCount: videoMappings.length, scrapeType })}`);
+        } catch (e) {
+            OmniBox.log('warn', `[哇哇影视] 刮削处理失败: ${e.message}`);
+        }
+    }
+
+    for (const source of vod_play_sources) {
+        for (const ep of source.episodes || []) {
+            const mapping = videoMappings.find((m) => m?.fileId === ep._fid);
+            if (!mapping) continue;
+            const oldName = ep.name;
+            const newName = buildScrapedEpisodeName(scrapeData, mapping, oldName);
+            if (newName && newName !== oldName) {
+                ep.name = newName;
+                OmniBox.log('info', `[哇哇影视] 应用刮削后源文件名: ${oldName} -> ${newName}`);
+            }
+            ep._seasonNumber = mapping.seasonNumber;
+            ep._episodeNumber = mapping.episodeNumber;
+        }
+    }
+
+    for (const source of vod_play_sources) {
+        const hasEpisodeNumber = (source.episodes || []).some((ep) => ep._episodeNumber !== undefined && ep._episodeNumber !== null);
+        if (hasEpisodeNumber) {
+            source.episodes.sort((a, b) => {
+                const seasonA = a._seasonNumber || 0;
+                const seasonB = b._seasonNumber || 0;
+                if (seasonA !== seasonB) return seasonA - seasonB;
+                const episodeA = a._episodeNumber || 0;
+                const episodeB = b._episodeNumber || 0;
+                return episodeA - episodeB;
+            });
+        }
+        source.episodes = (source.episodes || []).map((ep) => ({
+            name: ep.name,
+            playId: ep.playId,
+        }));
+    }
+
     return {
         list: [{
             vod_id: item.vod_id,
-            vod_name: item.vod_name,
-            vod_pic: item.vod_pic,
+            vod_name: scrapeData?.title || item.vod_name,
+            vod_pic: scrapeData?.posterPath ? `https://image.tmdb.org/t/p/w500${scrapeData.posterPath}` : item.vod_pic,
             vod_remarks: item.vod_remarks,
-            vod_content: item.vod_content || '',
-            vod_year: item.vod_year || '',
+            vod_content: scrapeData?.overview || item.vod_content || '',
+            vod_year: scrapeData?.releaseDate ? String(scrapeData.releaseDate).substring(0, 4) : (item.vod_year || ''),
             vod_area: item.vod_area || '',
-            vod_actor: item.vod_actor || '',
-            vod_director: item.vod_director || '',
+            vod_actor: (scrapeData?.credits?.cast || []).slice(0, 5).map((c) => c?.name).filter(Boolean).join(',') || item.vod_actor || '',
+            vod_director: (scrapeData?.credits?.crew || []).filter((c) => c?.job === 'Director' || c?.department === 'Directing').slice(0, 3).map((c) => c?.name).filter(Boolean).join(',') || item.vod_director || '',
             vod_play_sources: vod_play_sources
         }]
     };
@@ -336,8 +442,19 @@ async function play(params) {
     const playId = params.playId;
     
     try {
-        const jsonStr = Buffer.from(playId, 'base64').toString('utf8');
-        const playData = JSON.parse(jsonStr);
+        const playData = decodeMeta(playId);
+
+        try {
+            const sourceVideoId = String(params.vodId || playData.sid || '');
+            const sourceId = sourceVideoId
+                ? `spider_source_${await OmniBox.getSourceId()}_${sourceVideoId}`
+                : '';
+            if (sourceId) {
+                await OmniBox.getScrapeMetadata(sourceId);
+            }
+        } catch (e) {
+            OmniBox.log('warn', `[哇哇影视] 读取刮削元数据失败: ${e.message}`);
+        }
         
         return {
             parse: 0,
