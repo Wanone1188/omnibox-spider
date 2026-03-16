@@ -2,19 +2,46 @@
 // @author 
 // @description 
 // @dependencies: axios
-// @version 1.0.0
+// @version 1.1.0
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/直播/YY轮播.js
+
 const axios = require("axios");
 const OmniBox = require("omnibox_sdk");
 
 // ========== 全局配置 ==========
-const MOBILE_UA = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.181 Mobile Safari/537.36";
 const DEFAULT_PIC = "https://img.alicdn.com/imgextra/i2/O1CN01m9V4QW1j9y9z9z9z9_!!6000000004502-2-tps-200-200.png";
+const FAKE_COOKIE = "hd_newui=0.016482617745180117; hdjs_session_id=0.3502330236842982; hiido_ui=0.2409064060963675; hdjs_session_time=1773647185721";
+const PAGE_SIZE = 20; // 每页显示数量
 
-// 默认画质 (PHP源码默认是4500)
-const DEFAULT_QUALITY = "4500"; 
+// 性能优化配置
+const BATCH_SIZE = 5; // 并发请求数（从3提升到5）
+const BATCH_DELAY = 100; // 批次延迟（从200ms降到100ms）
+const SEARCH_TIMEOUT = 2000; // 搜索超时（从3000ms降到2000ms）
 
-// ========== 频道数据源 (ID列表) ==========
+// ========== 画质配置 ==========
+const QUALITY_CONFIG = {
+    options: [
+        { name: "标清(360P)", bitrate: "1200" },
+        { name: "高清(480P)", bitrate: "2500" },
+        { name: "超清(720P)", bitrate: "4500" },
+        { name: "蓝光(1080P)", bitrate: "8000" }
+    ],
+    default: "8000",
+    generatePlayUrl: function(id) {
+        return this.options.map(q => 
+            `${q.name}$${id}_${q.bitrate}`
+        ).join('#');
+    },
+    parseQuality: function(playId) {
+        if (playId.includes("_")) {
+            const parts = playId.split("_");
+            return { id: parts[0], quality: parts[1] };
+        }
+        return { id: playId, quality: this.default };
+    }
+};
+
+// ========== 频道数据源（需要手动替换）==========
 const RAW_DATA = `
 电影,#genre#
 【林正英经典】玄幻电影,1462895099
@@ -46,7 +73,6 @@ const RAW_DATA = `
 周星星系列,1354888671
 猩球崛起-怪兽片合集,1354930181
 爆笑电影！王牌大贱谍2-3,1382735556
-爆笑电影！王牌大贱谍2-3,1354936169
 蔡明春晚小品,1354936177
 飓风营救,1382735547
 国外黑色喜剧：冷幽默小剧场,1382745175
@@ -82,7 +108,7 @@ const RAW_DATA = `
 王牌特工：特工学院,1354936195
 前任攻略：爱情喜剧,1354932409
 无限复活-张柏芝主演爱情电影,1382745190
-蚁人-微观世界大 adventure,1382736913
+蚁人-微观世界大adventure,1382736913
 洪金宝经典喜剧电影,1354889042
 史诗级科幻电影-阿凡达,1382735577
 热血抗日电影,1382749907
@@ -115,6 +141,7 @@ const RAW_DATA = `
 重返青春-回到过去拥抱你,1382749940
 疯狂一家秀,1382736715
 不一样的花木兰传奇,1354930903
+
 连续剧,#genre#
 武林外传,1355652820
 【水浒传】24h,1382702247
@@ -125,7 +152,6 @@ const RAW_DATA = `
 【狂飙2老默】首播,1354790484
 弹幕天团下饭神剧,23512910
 少年包青天,1356043677
-纪晓岚,1352227227
 神探狄仁杰1,1382851575
 丸子,1382851588
 地下交通站,1382736795
@@ -168,10 +194,8 @@ const RAW_DATA = `
 寻秦记-穿越剧经典,1382749900
 西游记后传,1382736846
 风筝,1382828770
-鹿鼎记-周星驰版,1354658049
 每天都要快乐哦！,1354930909
 少年包青天第三部,1382736814
-风筝,1382828770
 智取威虎山,1382736843
 少年包青天,1414846486
 二号交通站,1382735582
@@ -240,18 +264,147 @@ YY用户,1382745117
 宰相刘罗锅,1353892468
 活力满满,1382851585
 保护我家蓉儿,1370293254
+打王者看电影,1460889796
+流行古装剧—知否知否应是绿肥红瘦,1354936134
+快来呀好剧在等你,1331686180
+【新三国】吕布,1382851459
+【新三国】日版,1382851457
+初恋脸,1382851597
+爱笑仙子,1382736838
+恐怖诡异墓穴,1382748585
+鬼经典老片,1463783198
+苍狼,1507704566
+福贵,1354926537
+法证先锋Ⅲ,1382736802
+8090.电影一哥,29197808
+和你不见不散,1355635293
+西游记后传蓝光,1353392400
+惊恐盗暮鬼怪,1382749525
+军旅剧（回忆经典）,1356306672
+电影电影电影电影电影电影,1351496216
+父母的爱情,1382768483
+少年歌行,1450556636
+24小时循环播电视剧,53320802
+探案！探案！,1382829413
+三国演义94年经典版,1354936241
+如沐春风,1382736810
+炊事班的故事III,1382736716
+天道-9.2高分好剧,1382735574
+欢乐集结号,1354931582
+读心神探,1382736875
+寻秦记,1354658048
+洪金宝福星系列,1354924839
+妖神记,1382745171
+炊事班的故事,1382749901
+法证先锋,1354930939
+变形金刚,1382736803
+超英集结,1382745091
+魔幻手机,1382735544
+时光的海,1382736885
+甜甜的恋爱这狗粮我吃了,1354932438
+西游记张卫健版,1354936155
+宫心计,1382828769
+大汉贤后卫子夫,1382735569
+金婚,1382828768
+灌篮高手,1382735626
+小师妹rua,1382736975
+非常保镖-经典港剧,1382736903
+开心小泡芙,1382851578
+大进军全集：红色系列电影,1382745083
+笑声传奇,1382736880
+速度与激情系列！-精彩大片,1382736911
+许多多,1382851583
+北京爱情故事，心动不打烊,1382744423
+我的体育老师,1382745169
+陈情令,1382745121
+YY用户,1382735572
+仙剑奇侠传-神仙姐姐驾到,1382749903
+农家小菜,1382736894
+亲爱的热爱的,1354932433
+抹茶少女,1382737888
+易中天品三国,1354931498
+哈利波特全集,1382745105
+老广的味道第3季-美食纪录片,1382735565
+少年包青天第三部,1382851540
+欢乐一起看,1354930926
+宫锁珠帘,1354926666
+宫心计,1354932429
+小敏,1382736890
+港剧-警犬巴打,1354932397
+你最爱的宋小宝,1354936198
+动作大片-热血开打,1354936168
+密子君,1382736717
+我的前半生,1382735564
+伪装者,1354936244
+超燃警匪片,1382735576
+法证先锋Ⅱ,1354888736
+穿越时空的爱恋,1382735567
+法证先锋2,1382736870
+欢乐集结号,1382735550
+发哥系列,1354888733
+东海龙棺,1354930968
+探秘中华美食,1354930954
+杭小妞,1382736910
+金玉满堂：精彩港剧,1382736881
+高分科幻动作片,1382749948
+苦乐村官,1382736864
+人生必看的科幻片,1382745114
+Blingbling,1382851598
+最美的青春,1382745116
+神探狄仁杰2,1382851146
+回家的诱惑,1354658043
+笑傲帮,1382735555
+士兵突击,1382851600
+辉煌或疯狂-韩剧,1382749902
+院线动作大片,1382736900
+无敌县令,1354932390
+渴望,1354930963
+小鬼当家-童年回忆,1382745104
+欢乐集结号3,1382736822
+YY用户,1382735578
+转角遇到爱,1382745085
+爆笑小品大合集,1382736821
+上海滩,1382745184
+这部剧你居然没看过？,1354932355
+以家人之名,1382736908
+妖神记之黑狱篇,1382745173
+海洋幻梦-泰剧,1382749889
+经典大片合集,1382749895
+超精彩！系列动作电影,1382745096
+野山鹰-影视剧,1354932395
+重生之超级赛亚人,1354936124
+复仇者联盟全季,1354936167
+真心想让你幸福,1382736876
+舌尖上的中国第2季,1354930943
+TVB收视爆剧-溏心风暴,1382736916
+心中的白月光,1382851580
+岳云鹏宋小宝也来演电影了？,1354926612
+非诚勿扰,1382735583
+不可能的任务-碟中谍4,1354930967
+闲暇观看综艺,1354932379
+国产喜剧,1382735584
+俺娘田小草,1382741638
+铁齿铜牙纪晓岚,1382626335
+非诚勿扰,1382745100
+国外院线动作大片,1382735570
+我爱我家,1382735557
+缺宅男女,1354930937
+宫心计-港剧-古装,1354933540
+你的回忆有我吗,1354889024
+舌尖上的中国第一季,1354930952
+国内喜剧,1382735563
+本山快乐营,1354933529
+河伯的新娘：奇幻爱情,1354936
 `;
 
-// ========== 数据解析 ==========
 let ID_NAME_MAP = {};
 let CHANNELS = {};
 
-function initData() {
+(function initData() {
     const lines = RAW_DATA.trim().split('\n');
     let currentCategory = "默认";
     CHANNELS = {};
     ID_NAME_MAP = {};
-
     lines.forEach(line => {
         line = line.trim();
         if (!line) return;
@@ -268,32 +421,99 @@ function initData() {
             }
         }
     });
-}
-initData();
+})();
 
 // ========== 工具函数 ==========
-const logInfo = (message, data = null) => {
-    const output = data ? `${message}: ${JSON.stringify(data)}` : message;
-    OmniBox.log("info", `[YY] ${output}`);
+const log = (msg) => {
+    OmniBox.log("info", `[YY] ${msg}`);
 };
 
-const logError = (message, error) => {
-    OmniBox.log("error", `[YY] ${message}: ${error.message || error}`);
-};
+function getSmartKeyword(name) {
+    if (!name) return "";
+    const bracketMatch = name.match(/【([^】]+)】/);
+    if (bracketMatch && bracketMatch[1]) {
+        return bracketMatch[1].trim();
+    }
+    const splitMatch = name.split(/[-_]/);
+    if (splitMatch.length > 1 && splitMatch[0].length > 1) {
+        return splitMatch[0].trim();
+    }
+    return name.trim();
+}
 
 function parsePlaySources(sourceName, episodesStr) {
     const playSources = [];
     if (!episodesStr) return playSources;
-    
     const episodes = episodesStr.split('#').map(item => {
         const [name, playId] = item.split('$');
         return { name: name || '正片', playId: playId || name };
     });
-
     if (episodes.length > 0) {
         playSources.push({ name: sourceName, episodes: episodes });
     }
     return playSources;
+}
+
+/**
+ * 批量获取封面（优化版：提升并发，减少延迟）
+ */
+async function batchGetCovers(items) {
+    const idToCover = {};
+    
+    if (!items || items.length === 0) {
+        return idToCover;
+    }
+    
+    const keywords = [...new Set(items.map(item => getSmartKeyword(item.name)))];
+    
+    log(`批量获取封面：${items.length}个频道，${keywords.length}个关键词`);
+    const startTime = Date.now();
+    
+    // 提升并发数到5
+    for (let i = 0; i < keywords.length; i += BATCH_SIZE) {
+        const chunk = keywords.slice(i, i + BATCH_SIZE);
+        
+        await Promise.all(chunk.map(async (keyword) => {
+            try {
+                const searchApi = `https://www.yy.com/apiSearch/doSearch.json?q=${encodeURIComponent(keyword)}&t=120&n=1&s=0`;
+                
+                const res = await axios.get(searchApi, {
+                    headers: { 
+                        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        'Referer': `https://www.yy.com/search?target=${encodeURIComponent(keyword)}&type=120`,
+                        'Cookie': FAKE_COOKIE,
+                        'Accept': 'application/json, text/plain, */*'
+                    },
+                    timeout: SEARCH_TIMEOUT
+                });
+                
+                const data = res.data;
+                if (data?.success && data.data?.searchResult?.response) {
+                    const docs = data.data.searchResult.response['120']?.docs;
+                    if (docs && docs.length > 0) {
+                        docs.forEach(doc => {
+                            const id = doc.sid || doc.ssid;
+                            const pic = doc.posterurl || doc.headurl;
+                            if (id && pic) {
+                                idToCover[id] = pic;
+                            }
+                        });
+                    }
+                }
+            } catch (e) {
+                // 忽略单个请求失败
+            }
+        }));
+        
+        // 减少延迟到100ms
+        if (i + BATCH_SIZE < keywords.length) {
+            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+        }
+    }
+    
+    const elapsed = Date.now() - startTime;
+    log(`批量获取完成：${Object.keys(idToCover).length}个封面，耗时${elapsed}ms`);
+    return idToCover;
 }
 
 // ========== 接口实现 ==========
@@ -308,64 +528,128 @@ async function home(params) {
 
 async function category(params) {
     const tid = params.categoryId || params.type_id;
+    const page = parseInt(params.page) || 1;
     const items = CHANNELS[tid] || [];
-    let list = items.map(item => ({
-        "vod_id": item.id,
-        "vod_name": item.name,
-        "vod_pic": DEFAULT_PIC, 
-        "vod_remarks": "Live",
-    }));
-    return { list, page: 1, pagecount: 1, limit: list.length, total: list.length };
+    
+    const total = items.length;
+    const pagecount = Math.ceil(total / PAGE_SIZE);
+    const start = (page - 1) * PAGE_SIZE;
+    const end = start + PAGE_SIZE;
+    const pageItems = items.slice(start, end);
+    
+    log(`分类[${tid}] 第${page}/${pagecount}页，${pageItems.length}个频道`);
+    
+    // 批量获取当前页的封面
+    const idToCover = await batchGetCovers(pageItems);
+    
+    let list = pageItems.map(item => {
+        const pic = idToCover[item.id] || DEFAULT_PIC;
+        return {
+            "vod_id": `${item.id}|||${pic}`,
+            "vod_name": item.name,
+            "vod_pic": pic,
+            "vod_remarks": "Live",
+        };
+    });
+    
+    return { 
+        list, 
+        page: page, 
+        pagecount: pagecount, 
+        limit: PAGE_SIZE, 
+        total: total 
+    };
 }
 
 async function search(params) {
     return { list: [] };
 }
 
-/**
- * 详情页：生成多画质选项
- */
 async function detail(params) {
-    const id = params.videoId;
-    logInfo(`请求详情 ID: ${id}`);
+    log(`========== 详情请求 ==========`);
     
+    let videoId = params.videoId;
+    let cachedPic = null;
+    
+    if (videoId.includes('|||')) {
+        const parts = videoId.split('|||');
+        videoId = parts[0];
+        cachedPic = parts[1];
+        log(`ID=${videoId}，复用封面`);
+    }
+    
+    const id = videoId;
     let realName = ID_NAME_MAP[id] || `YY直播:${id}`;
-    let realPic = DEFAULT_PIC;
+    let realPic = cachedPic || DEFAULT_PIC;
+    let foundSource = cachedPic ? "缓存" : "默认";
 
-    try {
-        const wapUrl = `https://wap.yy.com/mobileweb/${id}`;
-        const res = await axios.get(wapUrl, {
-            headers: { 'User-Agent': MOBILE_UA },
-            timeout: 5000
-        });
-        const html = res.data;
+    // 如果没有缓存封面，才去搜索
+    if (!cachedPic) {
+        try {
+            const searchKeyword = getSmartKeyword(realName);
+            const searchApi = `https://www.yy.com/apiSearch/doSearch.json?q=${encodeURIComponent(searchKeyword)}&t=120&n=1&s=0`;
+            
+            const res = await axios.get(searchApi, {
+                headers: { 
+                    'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    'Referer': `https://www.yy.com/search?target=${encodeURIComponent(searchKeyword)}&type=120`,
+                    'Cookie': FAKE_COOKIE
+                },
+                timeout: 3000
+            });
 
-        // 匹配封面
-        const picMatch = html.match(/"snapshot"\s*:\s*"([^"]+)"/) || html.match(/snapshot\\":\\"([^"]+)\\"/);
-        if (picMatch && picMatch[1]) {
-            realPic = picMatch[1].replace(/\\/g, "");
-            if (!realPic.startsWith("http")) realPic = "https:" + realPic;
+            const data = res.data;
+            
+            if (data?.success && data.data?.searchResult?.response) {
+                const docs = data.data.searchResult.response['120']?.docs;
+                
+                if (docs && docs.length > 0) {
+                    const targetDoc = docs.find(doc => doc.sid == id || doc.ssid == id);
+                    
+                    if (targetDoc) {
+                        if (targetDoc.posterurl) {
+                            realPic = targetDoc.posterurl;
+                            foundSource = "搜索API";
+                        } else if (targetDoc.headurl) {
+                            realPic = targetDoc.headurl;
+                            foundSource = "搜索API";
+                        }
+                    }
+                }
+            }
+
+            // 降级策略
+            if (foundSource === "默认") {
+                const pcUrl = `https://www.yy.com/${id}`;
+                try {
+                    const pcRes = await axios.get(pcUrl, {
+                        headers: { 
+                            'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            'Cookie': FAKE_COOKIE
+                        },
+                        timeout: 3000
+                    });
+                    
+                    const html = pcRes.data;
+                    const coverRegex = /individuationCover["']?\s*[:=]\s*["']?(http[^"']+(?:jpg|png|jpeg))/i;
+                    const coverMatch = html.match(coverRegex);
+                    
+                    if (coverMatch && coverMatch[1]) {
+                        realPic = coverMatch[1].replace(/\\/g, "");
+                        foundSource = "PC源码";
+                    }
+                } catch (pcErr) {}
+            }
+
+        } catch (e) {
+            log(`封面获取失败: ${e.message}`);
         }
-
-        // 匹配标题
-        const nameMatch = html.match(/"nickname"\s*:\s*"([^"]+)"/) || html.match(/nickname\\":\\"([^"]+)\\"/);
-        if (nameMatch && nameMatch[1]) {
-            realName = nameMatch[1];
-        }
-
-        logInfo("详情抓取成功", { name: realName, pic: realPic });
-
-    } catch (e) {
-        logError("详情抓取失败，使用默认信息", e);
     }
 
-    // 关键修改：生成多画质列表
-    // 格式: 显示名称$ID_画质代码 (参考PHP注释)
-    // 1200(360P)、2500(480P)、4500(720P)、8000(1080P)
-    // 默认把 4500 放第一位，因为最稳
-    const playUrlStr = `超清(720P)$${id}_4500#蓝光(1080P)$${id}_8000#高清(480P)$${id}_2500#标清(360P)$${id}_1200`;
-    
+    const playUrlStr = QUALITY_CONFIG.generatePlayUrl(id);
     const playSources = parsePlaySources("YY高清", playUrlStr);
+    
+    log(`${realName} | 来源:${foundSource}`);
 
     return {
         list: [{
@@ -373,62 +657,46 @@ async function detail(params) {
             "vod_name": realName,
             "vod_pic": realPic,
             "vod_play_sources": playSources,
-            "vod_content": `主播：${realName}\n提示：如蓝光无法播放请切换超清`,
+            "vod_content": `主播：${realName}\nID：${id}\n来源：${foundSource}\n详情页：https://www.yy.com/${id}`,
             "vod_remarks": "直播中"
         }]
     };
 }
 
-/**
- * 播放解析：动态解析画质参数
- */
 async function play(params) {
-    let rid = params.playId;
-    let quality = DEFAULT_QUALITY; // 默认 4500
-
-    // 解析 ID_Quality 格式
-    if (rid.includes("_")) {
-        const parts = rid.split("_");
-        rid = parts[0];
-        quality = parts[1];
-    }
+    const { id: rid, quality } = QUALITY_CONFIG.parseQuality(params.playId);
+    const qualityName = QUALITY_CONFIG.options.find(q => q.bitrate === quality)?.name || "未知";
+    
+    log(`播放 ID=${rid} 画质=${qualityName}`);
     
     const headers = {
         "Referer": "https://wap.yy.com/",
-        "User-Agent": MOBILE_UA
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     };
-
+    
     const url = `https://interface.yy.com/hls/new/get/${rid}/${rid}/${quality}?source=wapyy&callback=jsonp3`;
-
-    logInfo(`解析播放: ${rid}, 画质: ${quality}, URL: ${url}`);
-
+    
     try {
-        const res = await axios.get(url, { 
-            headers: headers,
-            timeout: 8000
-        });
-
+        const res = await axios.get(url, { headers: headers, timeout: 8000 });
         const content = res.data.toString();
+        
         const match = content.match(/jsonp3\(([\s\S]*?)\)/);
-
         if (match && match[1]) {
             const json = JSON.parse(match[1]);
             
-            if (json && json.hls) {
-                const hlsUrl = json.hls;
-                logInfo("解析成功", { url: hlsUrl });
-                
-                return {
-                    parse: 0,
-                    url: hlsUrl,
-                    header: headers
-                };
+            if (json.hls) {
+                log(`✅ 播放成功: ${json.hls}`);
+                return { parse: 0, url: json.hls, header: headers };
+            } else {
+                log(`❌ 无hls字段: ${JSON.stringify(json)}`);
             }
+        } else {
+            log(`❌ 响应格式错误: ${content.substring(0, 200)}`);
         }
     } catch (e) {
-        logError("播放解析请求失败", e);
+        log(`❌ 播放失败: ${e.message}`);
     }
-
+    
     return { error: "未获取到播放地址" };
 }
 
